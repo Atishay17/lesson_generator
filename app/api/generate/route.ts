@@ -6,7 +6,7 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-export const maxDuration = 60; // Set max duration to 60 seconds
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
@@ -41,7 +41,6 @@ export async function POST(request: Request) {
 
     const title = outline.trim().slice(0, 50) + (outline.length > 50 ? "..." : "");
 
-    // Create lesson in database with 'generating' status
     const { data: lesson, error: dbError } = await supabase
       .from("lessons")
       .insert({
@@ -60,7 +59,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Generate the lesson SYNCHRONOUSLY (wait for it)
     try {
       await generateLesson(supabase, lesson.id, outline.trim());
       
@@ -72,7 +70,6 @@ export async function POST(request: Request) {
     } catch (genError: any) {
       console.error("Generation error:", genError);
       
-      // Mark as failed
       await supabase
         .from("lessons")
         .update({
@@ -95,45 +92,40 @@ export async function POST(request: Request) {
   }
 }
 
-// Synchronous generation function
 async function generateLesson(supabase: any, lessonId: string, outline: string) {
   const prompt = `You are an expert educational content creator.
 
-Create an engaging, well-structured lesson for: "${outline}"
+Create a structured lesson for: "${outline}"
 
-STRUCTURE YOUR LESSON:
-1. Main title (clear and descriptive)
-2. Brief introduction explaining what will be covered
-3. Main content (questions, explanations, examples)
-4. If it's a quiz: number each question clearly
-5. Use simple, clear language
-6. Make it engaging and educational
+You MUST respond with ONLY valid JSON in this exact format:
 
-FORMAT AS REACT COMPONENT:
-- Use semantic HTML with Tailwind CSS
-- Structure: title, intro paragraph, then questions/content sections
-- For quizzes: each question in its own section
-- Use appropriate spacing and styling
-- Keep it clean and readable
-
-EXAMPLE STRUCTURE:
-export default function LessonComponent() {
-  return (
-    <div className="max-w-4xl mx-auto">
-      <h1 className="text-4xl font-bold mb-4 text-indigo-900">Main Title</h1>
-      <p className="text-lg text-gray-600 mb-8">Brief introduction paragraph.</p>
-      
-      <div className="space-y-6">
-        <div className="bg-blue-50 p-6 rounded-lg">
-          <h3 className="text-xl font-semibold mb-3 text-gray-800">Question 1: Title</h3>
-          <p className="text-gray-700">Question content here</p>
-        </div>
-      </div>
-    </div>
-  );
+{
+  "title": "Main lesson title",
+  "subtitle": "Brief description",
+  "sections": [
+    {
+      "heading": "Section title",
+      "bodyMarkdown": "Content with **bold** and *italic* support. Use bullet points:\n- Point 1\n- Point 2"
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Question text?",
+      "choices": ["Option A", "Option B", "Option C", "Option D"],
+      "answer": "Option A",
+      "explanation": "Why this is correct"
+    }
+  ]
 }
 
-Generate clean, educational content now:`;
+RULES:
+- Include 2-4 sections explaining the topic
+- If it's a quiz/test, include 3-10 quiz questions
+- Use markdown formatting in bodyMarkdown (**, *, lists, etc.)
+- Keep language clear and educational
+- No code fences, no extra text, ONLY the JSON object
+
+Generate the lesson now:`;
 
   console.log(`🤖 Generating lesson ${lessonId}...`);
 
@@ -141,7 +133,7 @@ Generate clean, educational content now:`;
     messages: [
       {
         role: "system",
-        content: "You are an expert TypeScript and React developer who creates educational content. Generate clean, working, executable code only. Never use markdown code fences or explanations.",
+        content: "You are a JSON-generating educational content expert. Always respond with valid JSON only, no markdown formatting, no explanations.",
       },
       {
         role: "user",
@@ -153,20 +145,32 @@ Generate clean, educational content now:`;
     max_tokens: 4096,
   });
 
-  let generatedCode = chatCompletion.choices[0]?.message?.content || "";
-  generatedCode = cleanGeneratedCode(generatedCode);
+  let generatedContent = chatCompletion.choices[0]?.message?.content || "";
+  
+  // Clean up the response
+  generatedContent = cleanJSONResponse(generatedContent);
 
-  if (!isValidReactComponent(generatedCode)) {
-    throw new Error("Generated code is not a valid React component");
+  // Validate it's valid JSON
+  let lessonData;
+  try {
+    lessonData = JSON.parse(generatedContent);
+  } catch (parseError) {
+    console.error("Failed to parse JSON:", generatedContent);
+    throw new Error("Generated content is not valid JSON");
+  }
+
+  // Validate structure
+  if (!lessonData.title || !lessonData.sections || !Array.isArray(lessonData.sections)) {
+    throw new Error("Generated lesson missing required fields");
   }
 
   console.log(`✅ Lesson ${lessonId} generated successfully`);
 
-  // Update lesson in database
+  // Store as JSON string
   const { error: updateError } = await supabase
     .from("lessons")
     .update({
-      content: generatedCode,
+      content: generatedContent,
       status: "generated",
     })
     .eq("id", lessonId);
@@ -178,32 +182,19 @@ Generate clean, educational content now:`;
   console.log(`💾 Lesson ${lessonId} saved to database`);
 }
 
-function cleanGeneratedCode(code: string): string {
-  code = code.replace(/```typescript\n?/g, "");
-  code = code.replace(/```tsx\n?/g, "");
-  code = code.replace(/```javascript\n?/g, "");
-  code = code.replace(/```jsx\n?/g, "");
-  code = code.replace(/```\n?/g, "");
-  code = code.trim();
-
-  if (!code.includes("import")) {
-    code = `import { useState } from "react";\n\n${code}`;
+function cleanJSONResponse(content: string): string {
+  // Remove markdown code fences if present
+  content = content.replace(/```json\n?/g, "");
+  content = content.replace(/```\n?/g, "");
+  content = content.trim();
+  
+  // Find JSON object bounds
+  const firstBrace = content.indexOf('{');
+  const lastBrace = content.lastIndexOf('}');
+  
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    content = content.substring(firstBrace, lastBrace + 1);
   }
-
-  return code;
-}
-
-function isValidReactComponent(code: string): boolean {
-  if (!code.includes("export default")) {
-    return false;
-  }
-
-  const hasFunction =
-    code.includes("function") ||
-    code.includes("const") ||
-    code.includes("=>");
-
-  const hasReturn = code.includes("return");
-
-  return hasFunction && hasReturn;
+  
+  return content;
 }
