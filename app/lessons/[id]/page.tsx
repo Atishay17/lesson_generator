@@ -30,6 +30,66 @@ interface Lesson {
   created_at: string;
 }
 
+// Helper: safely extract JSON from various formats
+function extractJsonFromContent(content: string): LessonData | null {
+  if (!content) return null;
+
+  // Method 1: Try direct JSON parse (for new format)
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed.title && Array.isArray(parsed.sections)) {
+      return parsed;
+    }
+  } catch (e) {
+    // Not direct JSON, try other methods
+  }
+
+  // Method 2: Look for JSON in markdown code fences
+  const fencedMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+  if (fencedMatch) {
+    try {
+      const parsed = JSON.parse(fencedMatch[1]);
+      if (parsed.title && Array.isArray(parsed.sections)) {
+        return parsed;
+      }
+    } catch (e) {
+      // Continue to next method
+    }
+  }
+
+  // Method 3: Find JSON object with balanced braces
+  const firstBrace = content.indexOf('{');
+  if (firstBrace !== -1) {
+    let depth = 0;
+    let endBrace = -1;
+    
+    for (let i = firstBrace; i < content.length; i++) {
+      if (content[i] === '{') depth++;
+      else if (content[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          endBrace = i;
+          break;
+        }
+      }
+    }
+    
+    if (endBrace !== -1) {
+      try {
+        const jsonStr = content.substring(firstBrace, endBrace + 1);
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.title && Array.isArray(parsed.sections)) {
+          return parsed;
+        }
+      } catch (e) {
+        // Failed to parse
+      }
+    }
+  }
+
+  return null;
+}
+
 export default function LessonPage() {
   const params = useParams();
   const lessonId = params.id as string;
@@ -38,7 +98,7 @@ export default function LessonPage() {
   const [lessonData, setLessonData] = useState<LessonData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showRawJSON, setShowRawJSON] = useState(false);
+  const [showRawContent, setShowRawContent] = useState(false);
   const [userAnswers, setUserAnswers] = useState<{[key: number]: string}>({});
   const [showResults, setShowResults] = useState(false);
 
@@ -70,14 +130,15 @@ export default function LessonPage() {
 
       setLesson(data);
 
-      // Parse JSON content
+      // Safely parse lesson content
       if (data.status === "generated" && data.content) {
-        try {
-          const parsed = JSON.parse(data.content);
+        const parsed = extractJsonFromContent(data.content);
+        
+        if (parsed) {
           setLessonData(parsed);
-        } catch (e) {
-          console.error("Failed to parse lesson content:", e);
-          setError("Lesson content is invalid");
+        } else {
+          console.warn("Could not extract valid lesson JSON from content");
+          setError("Lesson content is in an incompatible format. Please regenerate this lesson.");
         }
       }
 
@@ -206,32 +267,21 @@ export default function LessonPage() {
                 </div>
               </div>
               <button
-                onClick={() => setShowRawJSON(!showRawJSON)}
+                onClick={() => setShowRawContent(!showRawContent)}
                 className="ml-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition"
               >
-                {showRawJSON ? '📖 View Lesson' : '📋 View JSON'}
+                {showRawContent ? '📖 View Lesson' : '🔍 Debug'}
               </button>
             </div>
           </div>
         </div>
 
         {/* Content */}
-        {showRawJSON ? (
+        {showRawContent ? (
           <div className="bg-white rounded-2xl shadow-xl p-8">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-gray-800">Raw JSON Data</h2>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(lesson.content);
-                  alert('JSON copied to clipboard!');
-                }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition"
-              >
-                📋 Copy JSON
-              </button>
-            </div>
-            <pre className="bg-gray-900 text-green-400 p-6 rounded-lg overflow-x-auto text-sm">
-              {JSON.stringify(lessonData, null, 2)}
+            <h2 className="text-xl font-bold text-gray-800 mb-4">Raw Content (Debug)</h2>
+            <pre className="bg-gray-900 text-green-400 p-6 rounded-lg overflow-x-auto text-sm whitespace-pre-wrap">
+              {lesson.content}
             </pre>
           </div>
         ) : lessonData ? (
@@ -326,8 +376,20 @@ export default function LessonPage() {
             )}
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-xl p-8 text-center text-gray-500">
-            <p>No lesson content available</p>
+          <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
+            <div className="text-yellow-500 text-5xl mb-4">⚠️</div>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">
+              Incompatible Lesson Format
+            </h2>
+            <p className="text-gray-600 mb-6">
+              This lesson was created with an older format. Please generate a new lesson for the best experience.
+            </p>
+            <Link
+              href="/"
+              className="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition"
+            >
+              Generate New Lesson
+            </Link>
           </div>
         )}
       </div>
