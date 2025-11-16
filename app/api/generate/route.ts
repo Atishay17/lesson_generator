@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     if (dbError || !lesson) {
       console.error("Database error:", dbError);
       return Response.json(
-        { success: false, error: "Failed to create lesson in database" },
+        { success: false, error: "Failed to create lesson" },
         { status: 500 }
       );
     }
@@ -65,7 +65,6 @@ export async function POST(request: Request) {
       return Response.json({
         success: true,
         lessonId: lesson.id,
-        message: "Lesson generated successfully",
       });
     } catch (genError: any) {
       console.error("Generation error:", genError);
@@ -74,127 +73,114 @@ export async function POST(request: Request) {
         .from("lessons")
         .update({
           status: "failed",
-          error_message: genError.message || "Generation failed",
+          error_message: genError.message,
         })
         .eq("id", lesson.id);
       
       return Response.json(
-        { success: false, error: "Failed to generate lesson: " + genError.message },
+        { success: false, error: genError.message },
         { status: 500 }
       );
     }
   } catch (error: any) {
-    console.error("Error in generate API:", error);
+    console.error("API error:", error);
     return Response.json(
-      { success: false, error: error.message || "Unknown error" },
+      { success: false, error: error.message },
       { status: 500 }
     );
   }
 }
 
 async function generateLesson(supabase: any, lessonId: string, outline: string) {
-  const prompt = `You are an expert educational content creator.
-
-Create a structured lesson for: "${outline}"
-
-You MUST respond with ONLY valid JSON in this exact format:
-
-{
-  "title": "Main lesson title",
-  "subtitle": "Brief description",
-  "sections": [
-    {
-      "heading": "Section title",
-      "bodyMarkdown": "Content with **bold** and *italic* support. Use bullet points:\n- Point 1\n- Point 2"
-    }
-  ],
-  "quiz": [
-    {
-      "question": "Question text?",
-      "choices": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "Option A",
-      "explanation": "Why this is correct"
-    }
-  ]
-}
-
-RULES:
-- Include 2-4 sections explaining the topic
-- If it's a quiz/test, include 3-10 quiz questions
-- Use markdown formatting in bodyMarkdown (**, *, lists, etc.)
-- Keep language clear and educational
-- No code fences, no extra text, ONLY the JSON object
-
-Generate the lesson now:`;
-
-  console.log(`🤖 Generating lesson ${lessonId}...`);
+  console.log(`Generating lesson ${lessonId}`);
 
   const chatCompletion = await groq.chat.completions.create({
     messages: [
       {
         role: "system",
-        content: "You are a JSON-generating educational content expert. Always respond with valid JSON only, no markdown formatting, no explanations.",
+        content: "You are a JSON generator. Output ONLY valid JSON. No code. No markdown. No explanations. Just a pure JSON object.",
       },
       {
         role: "user",
-        content: prompt,
+        content: `Create educational content about: "${outline}"
+
+${outline.toLowerCase().includes('quiz') || outline.toLowerCase().includes('question') ? 
+  `IMPORTANT: If the outline mentions a specific number of questions (like "10 questions"), you MUST include exactly that many questions in the quiz array.` : ''}
+
+Output ONLY this JSON (nothing else):
+{
+  "title": "Engaging title",
+  "subtitle": "One sentence summary",
+  "sections": [
+    {"heading": "Introduction", "bodyMarkdown": "Content with **bold**.\\n\\n- Point 1\\n- Point 2"},
+    {"heading": "Details", "bodyMarkdown": "More information here."}
+  ],
+  "quiz": [
+    {"question": "Question?", "choices": ["A", "B", "C", "D"], "answer": "A", "explanation": "Why A"}
+  ]
+}
+
+Include 2-3 sections. ${outline.toLowerCase().includes('quiz') || outline.toLowerCase().includes('question') ? 
+  'For quiz: include the EXACT number of questions mentioned in the outline.' : 
+  'Include 3-5 quiz questions if appropriate.'}`,
       },
     ],
     model: "llama-3.3-70b-versatile",
-    temperature: 0.7,
-    max_tokens: 4096,
+    temperature: 0.3,
+    max_tokens: 6000,
   });
 
-  let generatedContent = chatCompletion.choices[0]?.message?.content || "";
+  let content = chatCompletion.choices[0]?.message?.content || "";
+  console.log("Raw response start:", content.substring(0, 50));
   
-  // Clean up the response
-  generatedContent = cleanJSONResponse(generatedContent);
+  // Aggressively clean
+  content = content.trim();
+  
+  // Remove ANY markdown
+  content = content.replace(/```json/gi, "");
+  content = content.replace(/```/g, "");
+  
+  // Remove any text before first {
+  const firstBrace = content.indexOf('{');
+  const lastBrace = content.lastIndexOf('}');
+  
+  if (firstBrace === -1 || lastBrace === -1) {
+    console.error("No JSON braces found in:", content);
+    throw new Error("AI did not return JSON");
+  }
+  
+  content = content.substring(firstBrace, lastBrace + 1);
+  console.log("Cleaned content start:", content.substring(0, 50));
 
-  // Validate it's valid JSON
-  let lessonData;
+  // Validate JSON
+  let parsed;
   try {
-    lessonData = JSON.parse(generatedContent);
-  } catch (parseError) {
-    console.error("Failed to parse JSON:", generatedContent);
-    throw new Error("Generated content is not valid JSON");
+    parsed = JSON.parse(content);
+  } catch (e: any) {
+    console.error("Parse error:", e.message);
+    console.error("Content:", content.substring(0, 200));
+    throw new Error("Invalid JSON from AI");
+  }
+  
+  if (!parsed.title || !Array.isArray(parsed.sections)) {
+    throw new Error("Missing required fields");
   }
 
-  // Validate structure
-  if (!lessonData.title || !lessonData.sections || !Array.isArray(lessonData.sections)) {
-    throw new Error("Generated lesson missing required fields");
-  }
+  console.log(`Valid lesson: ${parsed.sections.length} sections`);
 
-  console.log(`✅ Lesson ${lessonId} generated successfully`);
-
-  // Store as JSON string
-  const { error: updateError } = await supabase
+  // Save
+  const { error } = await supabase
     .from("lessons")
     .update({
-      content: generatedContent,
+      content: content,
       status: "generated",
     })
     .eq("id", lessonId);
 
-  if (updateError) {
-    throw new Error("Failed to update lesson in database");
-  }
-
-  console.log(`💾 Lesson ${lessonId} saved to database`);
-}
-
-function cleanJSONResponse(content: string): string {
-  // Remove markdown code fences if present
-  content = content.replace(/```json\n?/g, "");
-  content = content.replace(/```\n?/g, "");
-  content = content.trim();
-  
-  // Find JSON object bounds
-  const firstBrace = content.indexOf('{');
-  const lastBrace = content.lastIndexOf('}');
-  
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    content = content.substring(firstBrace, lastBrace + 1);
+  if (error) {
+    console.error("Save error:", error);
+    throw new Error("Failed to save");
   }
   
-  return content;
+  console.log(`Lesson ${lessonId} saved`);
 }

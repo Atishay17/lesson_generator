@@ -292,9 +292,10 @@ export default function LessonPage() {
                 <h2 className="text-2xl font-bold text-indigo-900 mb-4">
                   {section.heading}
                 </h2>
-                <div className="prose prose-lg max-w-none">
-                  <ReactMarkdown>{section.bodyMarkdown}</ReactMarkdown>
+                <div className="prose prose-lg max-w-none prose-headings:text-gray-900 text-gray-900">
+                <ReactMarkdown>{section.bodyMarkdown}</ReactMarkdown>
                 </div>
+
               </div>
             ))}
 
@@ -322,20 +323,20 @@ export default function LessonPage() {
                               key={cIdx}
                               onClick={() => handleAnswerSelect(qIdx, choice)}
                               disabled={showResults}
-                              className={`w-full text-left px-4 py-3 rounded-lg border-2 transition ${
+                              className={`w-full text-left px-4 py-3 rounded-lg border-2 transition font-medium ${
                                 showCorrect
-                                  ? 'border-green-500 bg-green-50'
+                                  ? 'border-green-600 bg-green-100 text-green-900'
                                   : showWrong
-                                  ? 'border-red-500 bg-red-50'
+                                  ? 'border-red-600 bg-red-100 text-red-900'
                                   : isSelected
-                                  ? 'border-indigo-500 bg-indigo-50'
-                                  : 'border-gray-200 hover:border-indigo-300 bg-white'
+                                  ? 'border-indigo-600 bg-indigo-100 text-indigo-900'
+                                  : 'border-gray-300 hover:border-indigo-500 hover:bg-indigo-50 bg-white text-gray-900'
                               }`}
                             >
                               <span className="flex items-center justify-between">
-                                <span>{choice}</span>
-                                {showCorrect && <span className="text-green-600">✓</span>}
-                                {showWrong && <span className="text-red-600">✗</span>}
+                                <span className="text-base">{choice}</span>
+                                {showCorrect && <span className="text-green-700 font-bold text-xl">✓</span>}
+                                {showWrong && <span className="text-red-700 font-bold text-xl">✗</span>}
                               </span>
                             </button>
                           );
